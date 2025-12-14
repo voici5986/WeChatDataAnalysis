@@ -9,6 +9,8 @@
 """
 
 import uvicorn
+import os
+from pathlib import Path
 
 def main():
     """启动微信解密工具API服务"""
@@ -21,12 +23,24 @@ def main():
     print("按 Ctrl+C 停止服务")
     print("=" * 60)
     
+    repo_root = Path(__file__).resolve().parent
+    enable_reload = os.environ.get("WECHAT_TOOL_RELOAD", "0") == "1"
+
     # 启动API服务
     uvicorn.run(
         "wechat_decrypt_tool.api:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
+        reload=enable_reload,
+        reload_dirs=[str(repo_root / "src")] if enable_reload else None,
+        reload_excludes=[
+            "output/*",
+            "output/**",
+            "frontend/*",
+            "frontend/**",
+            ".venv/*",
+            ".venv/**",
+        ] if enable_reload else None,
         log_level="info"
     )
 
