@@ -112,33 +112,12 @@ def decrypt_v4(data: bytes, xor_key: int, aes_key: bytes) -> bytes:
 if version == 2 and xor_key is not None and aes_key16:
     print("\n[4.1] 使用本地 decrypt_v4 函数:")
     decrypted = decrypt_v4(data, xor_key, aes_key16)
-    
+     
     # 保存解密后的文件
     output_file = Path("test_decrypted_manual.jpg")
     with open(output_file, "wb") as f:
         f.write(decrypted)
     print(f"    已保存: {output_file} ({len(decrypted)} bytes)")
-    
-    # 使用 WxDatDecrypt 的函数
-    print("\n[4.2] 使用 WxDatDecrypt 的 decrypt_dat_v4:")
-    sys.path.insert(0, "WxDatDecrypt")
-    from decrypt import decrypt_dat_v4 as wx_decrypt_v4
-    
-    decrypted_wx = wx_decrypt_v4(TEST_FILE, xor_key, aes_key16)
-    print(f"    结果长度: {len(decrypted_wx)}")
-    print(f"    结果前 16 字节: {decrypted_wx[:16].hex()}")
-    
-    if decrypted_wx[:3] == b"\xff\xd8\xff":
-        print("    [OK] 解密成功! 是 JPEG 图片")
-    elif decrypted_wx[:8] == b"\x89PNG\r\n\x1a\n":
-        print("    [OK] 解密成功! 是 PNG 图片")
-    else:
-        print("    [WARN] 解密后不是有效图片头")
-    
-    output_file2 = Path("test_decrypted_wxdat.jpg")
-    with open(output_file2, "wb") as f:
-        f.write(decrypted_wx)
-    print(f"    已保存: {output_file2} ({len(decrypted_wx)} bytes)")
 else:
     print("    [ERROR] 无法解密: 缺少必要参数")
 

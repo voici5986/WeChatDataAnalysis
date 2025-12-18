@@ -32,3 +32,4 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wechat_decrypt_tool"]
+include = ["src/wechat_decrypt_tool/native/VoipEngine.dll"]
