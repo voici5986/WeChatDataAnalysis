@@ -49,10 +49,10 @@ from ..chat_helpers import (
 )
 from ..media_helpers import _try_find_decrypted_resource
 from ..path_fix import PathFixRoute
-from ..session_preview_index import (
-    build_session_preview_index,
-    get_session_preview_index_status,
-    load_session_previews,
+from ..session_last_message import (
+    build_session_last_message_table,
+    get_session_last_message_status,
+    load_session_last_messages,
 )
 
 logger = get_logger(__name__)
@@ -84,21 +84,21 @@ async def chat_search_index_build(account: Optional[str] = None, rebuild: bool =
     return start_chat_search_index_build(account_dir, rebuild=bool(rebuild))
 
 
-@router.get("/api/chat/session-preview/status", summary="会话最新消息预览索引状态")
-async def session_preview_status(account: Optional[str] = None):
+@router.get("/api/chat/session-last-message/status", summary="会话最后一条消息缓存表状态")
+async def session_last_message_status(account: Optional[str] = None):
     account_dir = _resolve_account_dir(account)
-    return get_session_preview_index_status(account_dir)
+    return get_session_last_message_status(account_dir)
 
 
-@router.post("/api/chat/session-preview/build", summary="构建/重建会话最新消息预览索引")
-async def session_preview_build(
+@router.post("/api/chat/session-last-message/build", summary="构建/重建会话最后一条消息缓存表")
+async def session_last_message_build(
     account: Optional[str] = None,
     rebuild: bool = False,
     include_hidden: bool = True,
     include_official: bool = True,
 ):
     account_dir = _resolve_account_dir(account)
-    return build_session_preview_index(
+    return build_session_last_message_table(
         account_dir,
         rebuild=bool(rebuild),
         include_hidden=bool(include_hidden),
@@ -984,24 +984,32 @@ async def list_chat_sessions(
     preview_mode = str(preview or "").strip().lower()
     if preview_mode not in {"latest", "index", "session", "db", "none"}:
         preview_mode = "latest"
+    if preview_mode == "index":
+        preview_mode = "latest"
 
-    latest_previews: dict[str, str] = {}
-    index_status: Optional[dict[str, Any]] = None
-    if preview_mode in {"latest", "index", "db"}:
+    last_previews: dict[str, str] = {}
+    if preview_mode == "latest":
         try:
-            index_status = get_session_preview_index_status(account_dir)
-            latest_previews = load_session_previews(account_dir, usernames)
+            last_previews = load_session_last_messages(account_dir, usernames)
+            # Backward-compatible: old decrypted accounts may not have built the cache table yet.
+            if (not last_previews) and usernames:
+                build_session_last_message_table(
+                    account_dir,
+                    rebuild=False,
+                    include_hidden=True,
+                    include_official=True,
+                )
+                last_previews = load_session_last_messages(account_dir, usernames)
         except Exception:
-            index_status = None
-            latest_previews = {}
+            last_previews = {}
 
     if preview_mode in {"latest", "db"}:
-        missing = [u for u in usernames if u and (u not in latest_previews)]
-        if missing:
-            legacy = _load_latest_message_previews(account_dir, missing)
+        targets = usernames if preview_mode == "db" else [u for u in usernames if u and (u not in last_previews)]
+        if targets:
+            legacy = _load_latest_message_previews(account_dir, targets)
             for u, v in legacy.items():
                 if v:
-                    latest_previews[u] = v
+                    last_previews[u] = v
 
     sessions: list[dict[str, Any]] = []
     for r in filtered:
@@ -1014,12 +1022,28 @@ async def list_chat_sessions(
             avatar_url = base_url + _build_avatar_url(account_dir.name, username)
 
         last_message = ""
-        draft_text = _decode_sqlite_text(r["draft"]).strip()
-        if draft_text:
-            draft_text = re.sub(r"\s+", " ", draft_text).strip()
-            last_message = f"[草稿] {draft_text}" if draft_text else "[草稿]"
-        elif preview_mode in {"latest", "db", "index"} and str(latest_previews.get(username) or "").strip():
-            last_message = str(latest_previews.get(username) or "").strip()
+        if preview_mode == "session":
+            draft_text = _decode_sqlite_text(r["draft"]).strip()
+            if draft_text:
+                draft_text = re.sub(r"\s+", " ", draft_text).strip()
+                last_message = f"[草稿] {draft_text}" if draft_text else "[草稿]"
+            else:
+                summary_text = _decode_sqlite_text(r["summary"]).strip()
+                summary_text = re.sub(r"\s+", " ", summary_text).strip()
+                if summary_text:
+                    last_message = summary_text
+                else:
+                    last_message = _infer_last_message_brief(r["last_msg_type"], r["last_msg_sub_type"])
+        elif preview_mode in {"latest", "db"}:
+            if str(last_previews.get(username) or "").strip():
+                last_message = str(last_previews.get(username) or "").strip()
+            elif preview_mode != "none":
+                summary_text = _decode_sqlite_text(r["summary"]).strip()
+                summary_text = re.sub(r"\s+", " ", summary_text).strip()
+                if summary_text:
+                    last_message = summary_text
+                else:
+                    last_message = _infer_last_message_brief(r["last_msg_type"], r["last_msg_sub_type"])
         elif preview_mode != "none":
             summary_text = _decode_sqlite_text(r["summary"]).strip()
             summary_text = re.sub(r"\s+", " ", summary_text).strip()
@@ -1048,7 +1072,6 @@ async def list_chat_sessions(
         "account": account_dir.name,
         "total": len(sessions),
         "sessions": sessions,
-        "previewIndex": index_status.get("index") if isinstance(index_status, dict) else None,
     }
 
 
