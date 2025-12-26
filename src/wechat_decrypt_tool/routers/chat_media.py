@@ -18,6 +18,9 @@ from ..media_helpers import (
     _convert_silk_to_wav,
     _detect_image_extension,
     _detect_image_media_type,
+    _is_probably_valid_image,
+    _iter_media_source_candidates,
+    _order_media_candidates,
     _ensure_decrypted_resource_for_md5,
     _fallback_search_media_by_file_id,
     _fallback_search_media_by_md5,
@@ -31,6 +34,7 @@ from ..media_helpers import (
     _resolve_account_wxid_dir,
     _resolve_media_path_for_kind,
     _resolve_media_path_from_hardlink,
+    _try_fetch_emoticon_from_remote,
     _try_find_decrypted_resource,
     _try_strip_media_prefix,
 )
@@ -255,11 +259,14 @@ async def get_chat_image(
         if decrypted_path:
             data = decrypted_path.read_bytes()
             media_type = _detect_image_media_type(data[:32])
-            if media_type == "application/octet-stream":
-                guessed = mimetypes.guess_type(str(decrypted_path))[0]
-                if guessed:
-                    media_type = guessed
-            return Response(content=data, media_type=media_type)
+            if media_type != "application/octet-stream" and _is_probably_valid_image(data, media_type):
+                return Response(content=data, media_type=media_type)
+            # Corrupted cached file (e.g. wrong ext / partial data): remove and regenerate from source.
+            try:
+                if decrypted_path.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
+                    decrypted_path.unlink()
+            except Exception:
+                pass
 
     # 回退：从微信数据目录实时定位并解密
     wxid_dir = _resolve_account_wxid_dir(account_dir)
@@ -283,6 +290,7 @@ async def get_chat_image(
         )
 
     p: Optional[Path] = None
+    candidates: list[Path] = []
 
     if md5:
         p = _resolve_media_path_from_hardlink(
@@ -297,12 +305,25 @@ async def get_chat_image(
             hit = _fallback_search_media_by_md5(str(wxid_dir), str(md5), kind="image")
             if hit:
                 p = Path(hit)
+        # Also add scan-based candidates to improve the chance of finding a usable variant.
+        if wxid_dir:
+            try:
+                hit2 = _fallback_search_media_by_md5(str(wxid_dir), str(md5), kind="image")
+                if hit2:
+                    candidates.extend(_iter_media_source_candidates(Path(hit2)))
+            except Exception:
+                pass
     elif file_id:
         # 一些版本图片消息无 MD5，仅提供 cdnthumburl 等“文件标识”
         for r in [wxid_dir, db_storage_dir]:
             if not r:
                 continue
-            hit = _fallback_search_media_by_file_id(str(r), str(file_id), kind="image", username=str(username or ""))
+            hit = _fallback_search_media_by_file_id(
+                str(r),
+                str(file_id),
+                kind="image",
+                username=str(username or ""),
+            )
             if hit:
                 p = Path(hit)
                 break
@@ -310,9 +331,29 @@ async def get_chat_image(
     if not p:
         raise HTTPException(status_code=404, detail="Image not found.")
 
-    logger.info(f"chat_image: md5={md5} file_id={file_id} resolved_source={p}")
+    candidates.extend(_iter_media_source_candidates(p))
+    candidates = _order_media_candidates(candidates)
 
-    data, media_type = _read_and_maybe_decrypt_media(p, account_dir=account_dir, weixin_root=wxid_dir)
+    logger.info(f"chat_image: md5={md5} file_id={file_id} candidates={len(candidates)} first={p}")
+
+    data = b""
+    media_type = "application/octet-stream"
+    chosen: Optional[Path] = None
+    for src_path in candidates:
+        try:
+            data, media_type = _read_and_maybe_decrypt_media(src_path, account_dir=account_dir, weixin_root=wxid_dir)
+        except Exception:
+            continue
+
+        if media_type.startswith("image/") and (not _is_probably_valid_image(data, media_type)):
+            continue
+
+        if media_type != "application/octet-stream":
+            chosen = src_path
+            break
+
+    if not chosen:
+        raise HTTPException(status_code=422, detail="Image found but failed to decode/decrypt.")
 
     # 仅在 md5 有效时缓存到 resource 目录；file_id 可能非常长，避免写入超长文件名
     if md5 and media_type.startswith("image/"):
@@ -326,7 +367,9 @@ async def get_chat_image(
         except Exception:
             pass
 
-    logger.info(f"chat_image: md5={md5} file_id={file_id} media_type={media_type} bytes={len(data)}")
+    logger.info(
+        f"chat_image: md5={md5} file_id={file_id} chosen={chosen} media_type={media_type} bytes={len(data)}"
+    )
     return Response(content=data, media_type=media_type)
 
 
@@ -341,18 +384,31 @@ async def get_chat_emoji(md5: str, account: Optional[str] = None, username: Opti
     if decrypted_path:
         data = decrypted_path.read_bytes()
         media_type = _detect_image_media_type(data[:32])
-        if media_type == "application/octet-stream":
-            guessed = mimetypes.guess_type(str(decrypted_path))[0]
-            if guessed:
-                media_type = guessed
-        return Response(content=data, media_type=media_type)
+        if media_type != "application/octet-stream" and _is_probably_valid_image(data, media_type):
+            return Response(content=data, media_type=media_type)
+        try:
+            if decrypted_path.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
+                decrypted_path.unlink()
+        except Exception:
+            pass
 
     wxid_dir = _resolve_account_wxid_dir(account_dir)
     p = _resolve_media_path_for_kind(account_dir, kind="emoji", md5=str(md5), username=username)
-    if not p:
+
+    data = b""
+    media_type = "application/octet-stream"
+    if p:
+        data, media_type = _read_and_maybe_decrypt_media(p, account_dir=account_dir, weixin_root=wxid_dir)
+
+    if media_type == "application/octet-stream":
+        # Some emojis are stored encrypted (see emoticon.db); try remote fetch as fallback.
+        data2, mt2 = _try_fetch_emoticon_from_remote(account_dir, str(md5).lower())
+        if data2 is not None and mt2:
+            data, media_type = data2, mt2
+
+    if (not p) and media_type == "application/octet-stream":
         raise HTTPException(status_code=404, detail="Emoji not found.")
 
-    data, media_type = _read_and_maybe_decrypt_media(p, account_dir=account_dir, weixin_root=wxid_dir)
     if media_type.startswith("image/"):
         try:
             out_md5 = str(md5).lower()
