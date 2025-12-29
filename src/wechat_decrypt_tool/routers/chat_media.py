@@ -1,4 +1,5 @@
 import asyncio
+from functools import lru_cache
 import ipaddress
 import mimetypes
 import os
@@ -43,6 +44,122 @@ from ..path_fix import PathFixRoute
 logger = get_logger(__name__)
 
 router = APIRouter(route_class=PathFixRoute)
+
+
+@lru_cache(maxsize=64)
+def _hardlink_has_table_prefix(hardlink_db_path: str, prefix: str) -> bool:
+    p = str(hardlink_db_path or "").strip()
+    pref = str(prefix or "").strip()
+    if not p or not pref:
+        return False
+    try:
+        conn = sqlite3.connect(p)
+    except Exception:
+        return False
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name LIKE ? LIMIT 1",
+            (f"{pref}%",),
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _fast_probe_video_path_by_md5(
+    *,
+    md5: str,
+    wxid_dir: Optional[Path],
+    db_storage_dir: Optional[Path],
+    want_thumb: bool,
+) -> Optional[Path]:
+    md5_norm = str(md5 or "").strip().lower()
+    if not md5_norm:
+        return None
+
+    bases: list[Path] = []
+    for root in [wxid_dir, db_storage_dir]:
+        if not root:
+            continue
+        bases.extend([root / "msg" / "video", root / "video"])
+
+    uniq_bases: list[Path] = []
+    seen: set[str] = set()
+    for b in bases:
+        try:
+            rb = str(b.resolve())
+        except Exception:
+            rb = str(b)
+        if rb in seen:
+            continue
+        seen.add(rb)
+        try:
+            if b.exists() and b.is_dir():
+                uniq_bases.append(b)
+        except Exception:
+            continue
+
+    if not uniq_bases:
+        return None
+
+    if want_thumb:
+        variants = [
+            f"{md5_norm}_thumb.jpg",
+            f"{md5_norm}_thumb.jpeg",
+            f"{md5_norm}_thumb.png",
+            f"{md5_norm}_thumb.webp",
+            f"{md5_norm}_thumb.dat",
+            f"{md5_norm}.jpg",
+            f"{md5_norm}.jpeg",
+            f"{md5_norm}.png",
+            f"{md5_norm}.gif",
+            f"{md5_norm}.webp",
+            f"{md5_norm}.dat",
+        ]
+    else:
+        variants = [
+            f"{md5_norm}.mp4",
+            f"{md5_norm}.m4v",
+            f"{md5_norm}.mov",
+            f"{md5_norm}.dat",
+        ]
+
+    def is_month_dir_name(name: str) -> bool:
+        n = str(name or "")
+        return (
+            len(n) == 7
+            and n[4] == "-"
+            and n[:4].isdigit()
+            and n[5:7].isdigit()
+        )
+
+    for base in uniq_bases:
+        dirs_to_check: list[Path] = [base]
+        try:
+            for child in base.iterdir():
+                try:
+                    if child.is_dir() and is_month_dir_name(child.name):
+                        dirs_to_check.append(child)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        for d in dirs_to_check:
+            for name in variants:
+                p = d / name
+                try:
+                    if p.exists() and p.is_file():
+                        return p
+                except Exception:
+                    continue
+
+    return None
 
 
 @router.get("/api/chat/avatar", summary="获取联系人头像")
@@ -248,6 +365,7 @@ async def get_chat_image(
     file_id: Optional[str] = None,
     account: Optional[str] = None,
     username: Optional[str] = None,
+    deep_scan: bool = False,
 ):
     if (not md5) and (not file_id):
         raise HTTPException(status_code=400, detail="Missing md5/file_id.")
@@ -272,6 +390,7 @@ async def get_chat_image(
     wxid_dir = _resolve_account_wxid_dir(account_dir)
     hardlink_db_path = account_dir / "hardlink.db"
     db_storage_dir = _resolve_account_db_storage_dir(account_dir)
+    hardlink_has_image_table = _hardlink_has_table_prefix(str(hardlink_db_path), "image_hardlink_info")
 
     roots: list[Path] = []
     if wxid_dir:
@@ -301,18 +420,34 @@ async def get_chat_image(
             username=username,
             extra_roots=roots[1:],
         )
-        if (not p) and wxid_dir:
+
+        # Some WeChat versions send both md5 + file_id; md5 may be missing from hardlink.db while file_id still works.
+        if (not p) and file_id:
+            for r in [wxid_dir, db_storage_dir]:
+                if not r:
+                    continue
+                hit = _fallback_search_media_by_file_id(
+                    str(r),
+                    str(file_id),
+                    kind="image",
+                    username=str(username or ""),
+                )
+                if hit:
+                    p = Path(hit)
+                    break
+
+        # Deep scan is extremely expensive for misses (~seconds per md5). Only enable when:
+        # - user explicitly requests `deep_scan=1`, OR
+        # - hardlink.db doesn't have the image table (older/partial data).
+        allow_deep_scan = bool(deep_scan) or (not hardlink_has_image_table)
+        if (not p) and wxid_dir and allow_deep_scan:
             hit = _fallback_search_media_by_md5(str(wxid_dir), str(md5), kind="image")
             if hit:
                 p = Path(hit)
-        # Also add scan-based candidates to improve the chance of finding a usable variant.
-        if wxid_dir:
-            try:
-                hit2 = _fallback_search_media_by_md5(str(wxid_dir), str(md5), kind="image")
-                if hit2:
-                    candidates.extend(_iter_media_source_candidates(Path(hit2)))
-            except Exception:
-                pass
+                try:
+                    candidates.extend(_iter_media_source_candidates(Path(hit)))
+                except Exception:
+                    pass
     elif file_id:
         # 一些版本图片消息无 MD5，仅提供 cdnthumburl 等“文件标识”
         for r in [wxid_dir, db_storage_dir]:
@@ -428,6 +563,7 @@ async def get_chat_video_thumb(
     file_id: Optional[str] = None,
     account: Optional[str] = None,
     username: Optional[str] = None,
+    deep_scan: bool = False,
 ):
     if (not md5) and (not file_id):
         raise HTTPException(status_code=400, detail="Missing md5/file_id.")
@@ -446,6 +582,7 @@ async def get_chat_video_thumb(
     hardlink_db_path = account_dir / "hardlink.db"
     extra_roots: list[Path] = []
     db_storage_dir = _resolve_account_db_storage_dir(account_dir)
+    hardlink_has_video_table = _hardlink_has_table_prefix(str(hardlink_db_path), "video_hardlink_info")
     if db_storage_dir:
         extra_roots.append(db_storage_dir)
 
@@ -469,7 +606,19 @@ async def get_chat_video_thumb(
             username=username,
             extra_roots=roots[1:],
         )
-        if (not p) and wxid_dir:
+
+        # Many WeChat builds store video thumbnails directly as `{md5}_thumb.jpg` under msg/video/YYYY-MM.
+        # This fast probe avoids an expensive recursive scan on misses.
+        if (not p) and (wxid_dir or db_storage_dir):
+            p = _fast_probe_video_path_by_md5(
+                md5=str(md5),
+                wxid_dir=wxid_dir,
+                db_storage_dir=db_storage_dir,
+                want_thumb=True,
+            )
+
+        allow_deep_scan = bool(deep_scan) or (not hardlink_has_video_table)
+        if (not p) and wxid_dir and allow_deep_scan:
             hit = _fallback_search_media_by_md5(str(wxid_dir), str(md5), kind="video_thumb")
             if hit:
                 p = Path(hit)
@@ -494,6 +643,7 @@ async def get_chat_video(
     file_id: Optional[str] = None,
     account: Optional[str] = None,
     username: Optional[str] = None,
+    deep_scan: bool = False,
 ):
     if (not md5) and (not file_id):
         raise HTTPException(status_code=400, detail="Missing md5/file_id.")
@@ -511,6 +661,7 @@ async def get_chat_video(
     hardlink_db_path = account_dir / "hardlink.db"
     extra_roots: list[Path] = []
     db_storage_dir = _resolve_account_db_storage_dir(account_dir)
+    hardlink_has_video_table = _hardlink_has_table_prefix(str(hardlink_db_path), "video_hardlink_info")
     if db_storage_dir:
         extra_roots.append(db_storage_dir)
 
@@ -534,7 +685,15 @@ async def get_chat_video(
             username=username,
             extra_roots=roots[1:],
         )
-        if (not p) and wxid_dir:
+        if (not p) and (wxid_dir or db_storage_dir):
+            p = _fast_probe_video_path_by_md5(
+                md5=md5_norm,
+                wxid_dir=wxid_dir,
+                db_storage_dir=db_storage_dir,
+                want_thumb=False,
+            )
+        allow_deep_scan = bool(deep_scan) or (not hardlink_has_video_table)
+        if (not p) and wxid_dir and allow_deep_scan:
             hit = _fallback_search_media_by_md5(str(wxid_dir), md5_norm, kind="video")
             if hit:
                 p = Path(hit)
