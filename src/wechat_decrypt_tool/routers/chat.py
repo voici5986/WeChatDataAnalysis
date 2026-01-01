@@ -373,6 +373,7 @@ def _append_full_messages_from_rows(
         content_text = raw_text
         title = ""
         url = ""
+        record_item = ""
         image_md5 = ""
         emoji_md5 = ""
         emoji_url = ""
@@ -414,6 +415,7 @@ def _append_full_messages_from_rows(
             content_text = str(parsed.get("content") or "")
             title = str(parsed.get("title") or "")
             url = str(parsed.get("url") or "")
+            record_item = str(parsed.get("recordItem") or "")
             quote_title = str(parsed.get("quoteTitle") or "")
             quote_content = str(parsed.get("quoteContent") or "")
             quote_username = str(parsed.get("quoteUsername") or "")
@@ -606,14 +608,17 @@ def _append_full_messages_from_rows(
                 content_text = _infer_message_brief_by_local_type(local_type)
             else:
                 if content_text.startswith("<") or content_text.startswith('"<'):
+                    parsed_special = False
                     if "<appmsg" in content_text.lower():
                         parsed = _parse_app_message(content_text)
                         rt = str(parsed.get("renderType") or "")
                         if rt and rt != "text":
+                            parsed_special = True
                             render_type = rt
                             content_text = str(parsed.get("content") or content_text)
                             title = str(parsed.get("title") or title)
                             url = str(parsed.get("url") or url)
+                            record_item = str(parsed.get("recordItem") or record_item)
                             quote_title = str(parsed.get("quoteTitle") or quote_title)
                             quote_content = str(parsed.get("quoteContent") or quote_content)
                             amount = str(parsed.get("amount") or amount)
@@ -639,9 +644,11 @@ def _append_full_messages_from_rows(
                                 )
                                 if not content_text:
                                     content_text = transfer_status or "转账"
-                    t = _extract_xml_tag_text(content_text, "title")
-                    d = _extract_xml_tag_text(content_text, "des")
-                    content_text = t or d or _infer_message_brief_by_local_type(local_type)
+
+                    if not parsed_special:
+                        t = _extract_xml_tag_text(content_text, "title")
+                        d = _extract_xml_tag_text(content_text, "des")
+                        content_text = t or d or _infer_message_brief_by_local_type(local_type)
 
         if not content_text:
             content_text = _infer_message_brief_by_local_type(local_type)
@@ -664,6 +671,7 @@ def _append_full_messages_from_rows(
                 "content": content_text,
                 "title": title,
                 "url": url,
+                "recordItem": record_item,
                 "imageMd5": image_md5,
                 "imageFileId": image_file_id,
                 "emojiMd5": emoji_md5,
@@ -1080,6 +1088,19 @@ async def list_chat_sessions(
             else:
                 last_message = _infer_last_message_brief(r["last_msg_type"], r["last_msg_sub_type"])
 
+        # 合并转发聊天记录：左侧会话列表统一显示为 [聊天记录]
+        if preview_mode != "none" and not str(last_message or "").startswith("[草稿]"):
+            try:
+                last_msg_type = int(r["last_msg_type"] or 0)
+            except Exception:
+                last_msg_type = 0
+            try:
+                last_msg_sub_type = int(r["last_msg_sub_type"] or 0)
+            except Exception:
+                last_msg_sub_type = 0
+            if last_msg_type == 81604378673 or (last_msg_type == 49 and last_msg_sub_type == 19):
+                last_message = "[聊天记录]"
+
         last_time = _format_session_time(r["sort_timestamp"] or r["last_timestamp"])
 
         sessions.append(
@@ -1214,6 +1235,7 @@ def _collect_chat_messages(
                 content_text = raw_text
                 title = ""
                 url = ""
+                record_item = ""
                 image_md5 = ""
                 emoji_md5 = ""
                 emoji_url = ""
@@ -1257,6 +1279,7 @@ def _collect_chat_messages(
                     content_text = str(parsed.get("content") or "")
                     title = str(parsed.get("title") or "")
                     url = str(parsed.get("url") or "")
+                    record_item = str(parsed.get("recordItem") or "")
                     quote_title = str(parsed.get("quoteTitle") or "")
                     quote_content = str(parsed.get("quoteContent") or "")
                     quote_username = str(parsed.get("quoteUsername") or "")
@@ -1444,14 +1467,17 @@ def _collect_chat_messages(
                         content_text = _infer_message_brief_by_local_type(local_type)
                     else:
                         if content_text.startswith("<") or content_text.startswith('"<'):
+                            parsed_special = False
                             if "<appmsg" in content_text.lower():
                                 parsed = _parse_app_message(content_text)
                                 rt = str(parsed.get("renderType") or "")
                                 if rt and rt != "text":
+                                    parsed_special = True
                                     render_type = rt
                                     content_text = str(parsed.get("content") or content_text)
                                     title = str(parsed.get("title") or title)
                                     url = str(parsed.get("url") or url)
+                                    record_item = str(parsed.get("recordItem") or record_item)
                                     quote_title = str(parsed.get("quoteTitle") or quote_title)
                                     quote_content = str(parsed.get("quoteContent") or quote_content)
                                     amount = str(parsed.get("amount") or amount)
@@ -1477,9 +1503,11 @@ def _collect_chat_messages(
                                         )
                                         if not content_text:
                                             content_text = transfer_status or "转账"
-                            t = _extract_xml_tag_text(content_text, "title")
-                            d = _extract_xml_tag_text(content_text, "des")
-                            content_text = t or d or _infer_message_brief_by_local_type(local_type)
+
+                            if not parsed_special:
+                                t = _extract_xml_tag_text(content_text, "title")
+                                d = _extract_xml_tag_text(content_text, "des")
+                                content_text = t or d or _infer_message_brief_by_local_type(local_type)
 
                 if not content_text:
                     content_text = _infer_message_brief_by_local_type(local_type)
@@ -1509,6 +1537,7 @@ def _collect_chat_messages(
                         "content": content_text,
                         "title": title,
                         "url": url,
+                        "recordItem": record_item,
                         "imageMd5": image_md5,
                         "imageFileId": image_file_id,
                         "emojiMd5": emoji_md5,
@@ -1746,6 +1775,7 @@ async def list_chat_messages(
                 content_text = raw_text
                 title = ""
                 url = ""
+                record_item = ""
                 image_md5 = ""
                 emoji_md5 = ""
                 emoji_url = ""
@@ -1789,6 +1819,7 @@ async def list_chat_messages(
                     content_text = str(parsed.get("content") or "")
                     title = str(parsed.get("title") or "")
                     url = str(parsed.get("url") or "")
+                    record_item = str(parsed.get("recordItem") or "")
                     quote_title = str(parsed.get("quoteTitle") or "")
                     quote_content = str(parsed.get("quoteContent") or "")
                     quote_username = str(parsed.get("quoteUsername") or "")
@@ -1976,14 +2007,17 @@ async def list_chat_messages(
                         content_text = _infer_message_brief_by_local_type(local_type)
                     else:
                         if content_text.startswith("<") or content_text.startswith('"<'):
+                            parsed_special = False
                             if "<appmsg" in content_text.lower():
                                 parsed = _parse_app_message(content_text)
                                 rt = str(parsed.get("renderType") or "")
                                 if rt and rt != "text":
+                                    parsed_special = True
                                     render_type = rt
                                     content_text = str(parsed.get("content") or content_text)
                                     title = str(parsed.get("title") or title)
                                     url = str(parsed.get("url") or url)
+                                    record_item = str(parsed.get("recordItem") or record_item)
                                     quote_title = str(parsed.get("quoteTitle") or quote_title)
                                     quote_content = str(parsed.get("quoteContent") or quote_content)
                                     amount = str(parsed.get("amount") or amount)
@@ -2009,9 +2043,11 @@ async def list_chat_messages(
                                         )
                                         if not content_text:
                                             content_text = transfer_status or "转账"
-                            t = _extract_xml_tag_text(content_text, "title")
-                            d = _extract_xml_tag_text(content_text, "des")
-                            content_text = t or d or _infer_message_brief_by_local_type(local_type)
+
+                            if not parsed_special:
+                                t = _extract_xml_tag_text(content_text, "title")
+                                d = _extract_xml_tag_text(content_text, "des")
+                                content_text = t or d or _infer_message_brief_by_local_type(local_type)
 
                 if not content_text:
                     content_text = _infer_message_brief_by_local_type(local_type)
@@ -2034,6 +2070,7 @@ async def list_chat_messages(
                         "content": content_text,
                         "title": title,
                         "url": url,
+                        "recordItem": record_item,
                         "imageMd5": image_md5,
                         "imageFileId": image_file_id,
                         "emojiMd5": emoji_md5,

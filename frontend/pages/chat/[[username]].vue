@@ -318,7 +318,7 @@
                   </div>
                   <div v-else-if="message.renderType === 'video'" class="max-w-sm">
                     <div class="msg-radius overflow-hidden relative bg-black/5" @contextmenu="openMediaContextMenu($event, message, 'video')">
-                      <img v-if="message.videoThumbUrl" :src="message.videoThumbUrl" alt="视频" class="max-w-[260px] max-h-[260px] object-cover">
+                      <img v-if="message.videoThumbUrl" :src="message.videoThumbUrl" alt="视频" class="block w-[220px] max-w-[260px] h-auto max-h-[260px] object-cover">
                       <div v-else class="px-3 py-2 text-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                         :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
                         {{ message.content }}
@@ -442,6 +442,29 @@
                       </div>
                     </div>
                   </template>
+                  <!-- 合并转发聊天记录（Chat History） -->
+                  <div
+                    v-else-if="message.renderType === 'chatHistory'"
+                    class="wechat-chat-history-card wechat-special-card msg-radius"
+                    :class="message.isSent ? 'wechat-special-sent-side' : ''"
+                    @click.stop="openChatHistoryModal(message)"
+                  >
+                    <div class="wechat-chat-history-body">
+                      <div class="wechat-chat-history-title">{{ message.title || '聊天记录' }}</div>
+                      <div class="wechat-chat-history-preview" v-if="getChatHistoryPreviewLines(message).length">
+                        <div
+                          v-for="(line, idx) in getChatHistoryPreviewLines(message)"
+                          :key="idx"
+                          class="wechat-chat-history-line"
+                        >
+                          {{ line }}
+                        </div>
+                      </div>
+                    </div>
+                    <div class="wechat-chat-history-bottom">
+                      <span>聊天记录</span>
+                    </div>
+                  </div>
                   <div v-else-if="message.renderType === 'transfer'"
                     class="wechat-transfer-card msg-radius"
                     :class="[{ 'wechat-transfer-received': message.transferReceived, 'wechat-transfer-returned': isTransferReturned(message) }, message.isSent ? 'wechat-transfer-sent-side' : 'wechat-transfer-received-side']">
@@ -925,6 +948,193 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
         </svg>
       </button>
+    </div>
+
+    <!-- 合并转发聊天记录弹窗 -->
+    <div
+      v-if="chatHistoryModalVisible"
+      class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center"
+      @click="closeChatHistoryModal"
+    >
+      <div
+        class="w-[92vw] max-w-[560px] max-h-[80vh] bg-white rounded-xl shadow-xl overflow-hidden flex flex-col"
+        @click.stop
+      >
+        <div class="px-4 py-3 bg-neutral-100 border-b border-gray-200 flex items-center justify-between">
+          <div class="text-sm text-[#161616] truncate">{{ chatHistoryModalTitle || '聊天记录' }}</div>
+          <button
+            type="button"
+            class="p-2 rounded hover:bg-black/5"
+            @click="closeChatHistoryModal"
+            aria-label="关闭"
+            title="关闭"
+          >
+            <svg class="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="flex-1 overflow-auto bg-white">
+          <div v-if="!chatHistoryModalRecords.length" class="text-sm text-gray-500 text-center py-10">
+            没有可显示的聊天记录
+          </div>
+          <template v-else>
+            <div
+              v-for="(rec, idx) in chatHistoryModalRecords"
+              :key="rec.id || idx"
+              class="px-4 py-3 flex gap-3 border-b border-gray-100"
+            >
+              <div class="w-9 h-9 rounded-md overflow-hidden bg-gray-200 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
+                <img
+                  v-if="rec.senderAvatar"
+                  :src="rec.senderAvatar"
+                  alt="头像"
+                  class="w-full h-full object-cover"
+                />
+                <div v-else class="w-full h-full flex items-center justify-center text-xs font-bold text-gray-600">
+                  {{ (rec.senderDisplayName || rec.sourcename || '?').charAt(0) }}
+                </div>
+              </div>
+
+              <div class="min-w-0 flex-1" :class="{ 'privacy-blur': privacyMode }">
+                <div class="flex items-start gap-2">
+                  <div class="min-w-0 flex-1">
+                    <div
+                      v-if="chatHistoryModalInfo?.isChatRoom && (rec.senderDisplayName || rec.sourcename)"
+                      class="text-xs text-gray-500 leading-none truncate mb-1"
+                    >
+                      {{ rec.senderDisplayName || rec.sourcename }}
+                    </div>
+                  </div>
+                  <div v-if="rec.fullTime || rec.sourcetime" class="text-xs text-gray-400 flex-shrink-0 leading-none">
+                    {{ rec.fullTime || rec.sourcetime }}
+                  </div>
+                </div>
+
+                  <div class="mt-1">
+                  <!-- 视频 -->
+                  <div
+                    v-if="rec.renderType === 'video'"
+                    class="msg-radius overflow-hidden relative bg-black/5 inline-block"
+                    @contextmenu="openMediaContextMenu($event, rec, 'video')"
+                  >
+                    <img
+                      v-if="rec.videoThumbUrl && !rec._videoThumbError"
+                      :src="rec.videoThumbUrl"
+                      alt="视频"
+                      class="block w-[220px] max-w-[260px] h-auto max-h-[260px] object-cover"
+                      @error="onChatHistoryVideoThumbError(rec)"
+                    />
+                    <div v-else class="px-3 py-2 text-sm text-gray-700">{{ rec.content || '[视频]' }}</div>
+
+                    <a
+                      v-if="rec.videoThumbUrl && rec.videoUrl"
+                      :href="rec.videoUrl"
+                      target="_blank"
+                      rel="noreferrer"
+                      class="absolute inset-0 flex items-center justify-center"
+                    >
+                      <div class="w-12 h-12 rounded-full bg-black/45 flex items-center justify-center">
+                        <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                      </div>
+                    </a>
+                    <div class="absolute inset-0 flex items-center justify-center" v-else-if="rec.videoThumbUrl">
+                      <div class="w-12 h-12 rounded-full bg-black/45 flex items-center justify-center">
+                        <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                      </div>
+                    </div>
+                    <div
+                      v-if="rec.videoDuration"
+                      class="absolute bottom-2 right-2 text-xs text-white bg-black/55 px-1.5 py-0.5 rounded"
+                    >
+                      {{ formatChatHistoryVideoDuration(rec.videoDuration) }}
+                    </div>
+                  </div>
+
+                  <!-- 图片 -->
+                  <div
+                    v-else-if="rec.renderType === 'image'"
+                    class="msg-radius overflow-hidden cursor-pointer inline-block"
+                    @click="rec.imageUrl && openImagePreview(rec.imageUrl)"
+                    @contextmenu="openMediaContextMenu($event, rec, 'image')"
+                  >
+                    <img
+                      v-if="rec.imageUrl"
+                      :src="rec.imageUrl"
+                      alt="图片"
+                      class="max-w-[240px] max-h-[240px] object-cover hover:opacity-90 transition-opacity"
+                    />
+                    <div v-else class="px-3 py-2 text-sm text-gray-700">{{ rec.content || '[图片]' }}</div>
+                  </div>
+
+                  <!-- 表情 -->
+                  <div
+                    v-else-if="rec.renderType === 'emoji'"
+                    class="inline-block"
+                    @contextmenu="openMediaContextMenu($event, rec, 'emoji')"
+                  >
+                    <img v-if="rec.emojiUrl" :src="rec.emojiUrl" alt="表情" class="w-24 h-24 object-contain" />
+                    <div v-else class="px-3 py-2 text-sm text-gray-700">{{ rec.content || '[表情]' }}</div>
+                  </div>
+
+                  <!-- 引用（回复） -->
+                  <div v-else-if="rec.renderType === 'quote'" class="max-w-[420px]">
+                    <div
+                      class="px-2 text-xs text-neutral-700 rounded max-w-[404px] flex items-center bg-[#e1e1e1] cursor-pointer select-none"
+                      @click="openChatHistoryQuote(rec)"
+                      @contextmenu="openMediaContextMenu($event, rec.quoteMedia || rec, rec.quote?.kind || 'message')"
+                    >
+                      <div class="w-10 h-10 rounded overflow-hidden bg-neutral-300 flex-shrink-0 mr-2">
+                        <img
+                          v-if="rec.quote?.thumbUrl && !rec._quoteThumbError"
+                          :src="rec.quote.thumbUrl"
+                          alt="引用"
+                          class="w-full h-full object-cover"
+                          @error="onChatHistoryQuoteThumbError(rec)"
+                        />
+                        <div v-else class="w-full h-full flex items-center justify-center text-[10px] text-neutral-600">
+                          {{ rec.quote?.kind === 'video' ? '视频' : (rec.quote?.kind === 'image' ? '图片' : '表情') }}
+                        </div>
+                      </div>
+                      <div class="min-w-0 flex-1 py-2">
+                        <div class="line-clamp-2">
+                          {{ rec.quote?.label || (rec.quote?.kind === 'video' ? '[视频]' : (rec.quote?.kind === 'image' ? '[图片]' : '[表情]')) }}
+                        </div>
+                      </div>
+                      <div v-if="rec.quote?.kind === 'video' && rec.quote?.duration" class="ml-2 flex-shrink-0 text-[11px] text-neutral-600">
+                        {{ formatChatHistoryVideoDuration(rec.quote.duration) }}
+                      </div>
+                    </div>
+
+                    <div
+                      class="mt-1 text-sm text-gray-900 whitespace-pre-wrap break-words leading-relaxed"
+                      @contextmenu="openMediaContextMenu($event, rec, 'message')"
+                    >
+                      <span v-for="(seg, sidx) in parseTextWithEmoji(rec.content)" :key="sidx">
+                        <span v-if="seg.type === 'text'">{{ seg.content }}</span>
+                        <img v-else :src="seg.emojiSrc" :alt="seg.content" class="inline-block w-[1.25em] h-[1.25em] align-text-bottom mx-px">
+                      </span>
+                    </div>
+                  </div>
+
+                  <!-- 文本/其它 -->
+                  <div
+                    v-else
+                    class="text-sm text-gray-900 whitespace-pre-wrap break-words leading-relaxed"
+                    @contextmenu="openMediaContextMenu($event, rec, 'message')"
+                  >
+                    <span v-for="(seg, sidx) in parseTextWithEmoji(rec.content)" :key="sidx">
+                      <span v-if="seg.type === 'text'">{{ seg.content }}</span>
+                      <img v-else :src="seg.emojiSrc" :alt="seg.content" class="inline-block w-[1.25em] h-[1.25em] align-text-bottom mx-px">
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
     </div>
 
     <div
@@ -3386,6 +3596,7 @@ const normalizeMessage = (msg) => {
     voipType: msg.voipType || '',
     title: msg.title || '',
     url: msg.url || '',
+    recordItem: msg.recordItem || '',
     imageMd5: msg.imageMd5 || '',
     imageFileId: msg.imageFileId || '',
     emojiMd5: msg.emojiMd5 || '',
@@ -3468,6 +3679,371 @@ const onEmojiDownloadClick = async (message) => {
   }
 }
 
+const getChatHistoryPreviewLines = (message) => {
+  const raw = String(message?.content || '').trim()
+  if (!raw) return []
+  return raw.split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 4)
+}
+
+// 合并转发聊天记录弹窗
+const chatHistoryModalVisible = ref(false)
+const chatHistoryModalTitle = ref('')
+const chatHistoryModalRecords = ref([])
+const chatHistoryModalInfo = ref({ isChatRoom: false })
+
+const isMaybeMd5 = (value) => /^[0-9a-f]{32}$/i.test(String(value || '').trim())
+const pickFirstMd5 = (...values) => {
+  for (const v of values) {
+    const s = String(v || '').trim()
+    if (isMaybeMd5(s)) return s.toLowerCase()
+  }
+  return ''
+}
+
+const normalizeChatHistoryUrl = (value) => String(value || '').trim().replace(/\s+/g, '')
+
+const parseChatHistoryRecord = (recordItemXml) => {
+  if (!process.client) return { info: null, items: [] }
+  const xml = String(recordItemXml || '').trim()
+  if (!xml) return { info: null, items: [] }
+
+  const normalized = xml.replace(/&#x20;/g, ' ')
+  let doc
+  try {
+    doc = new DOMParser().parseFromString(normalized, 'text/xml')
+  } catch {
+    return { info: null, items: [] }
+  }
+
+  const parserErrors = doc.getElementsByTagName('parsererror')
+  if (parserErrors && parserErrors.length) return { info: null, items: [] }
+
+  const getText = (node, tag) => {
+    try {
+      const el = node.getElementsByTagName(tag)?.[0]
+      return String(el?.textContent || '').trim()
+    } catch {
+      return ''
+    }
+  }
+
+  const root = doc?.documentElement
+  const isChatRoom = String(getText(root, 'isChatRoom') || '').trim() === '1'
+  const title = getText(root, 'title')
+  const desc = getText(root, 'desc') || getText(root, 'info')
+
+  const items = Array.from(doc.getElementsByTagName('dataitem') || [])
+  const parsed = items.map((node, idx) => {
+    const datatype = String(node.getAttribute('datatype') || '').trim()
+    const dataid = String(node.getAttribute('dataid') || '').trim() || String(idx)
+
+    const sourcename = getText(node, 'sourcename')
+    const sourcetime = getText(node, 'sourcetime')
+    const sourceheadurl = normalizeChatHistoryUrl(getText(node, 'sourceheadurl'))
+    const datatitle = getText(node, 'datatitle')
+    const datadesc = getText(node, 'datadesc')
+    const datafmt = getText(node, 'datafmt')
+    const duration = getText(node, 'duration')
+
+    const fullmd5 = getText(node, 'fullmd5')
+    const thumbfullmd5 = getText(node, 'thumbfullmd5')
+    const md5 = getText(node, 'md5') || getText(node, 'emoticonmd5') || getText(node, 'emojiMd5')
+
+    let content = datatitle || datadesc
+    if (!content) {
+      if (datatype === '4') content = '[视频]'
+      else if (datatype === '2' || datatype === '3') content = '[图片]'
+      else if (datatype === '47' || datatype === '37') content = '[表情]'
+      else if (datatype) content = `[消息 ${datatype}]`
+      else content = '[消息]'
+    }
+
+    // Guess renderType using both datatype and available tags.
+    const fmt = String(datafmt || '').trim().toLowerCase().replace(/^\./, '')
+    const imageFormats = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif'])
+
+    let renderType = 'text'
+    if (datatype === '4' || String(duration || '').trim() || fmt === 'mp4') {
+      renderType = 'video'
+    } else if (datatype === '47' || datatype === '37') {
+      renderType = 'emoji'
+    } else if (
+      datatype === '2'
+      || datatype === '3'
+      || imageFormats.has(fmt)
+      || (datatype !== '1' && isMaybeMd5(fullmd5))
+    ) {
+      renderType = 'image'
+    } else if (isMaybeMd5(md5) && /表情/.test(String(content || ''))) {
+      // Some merged-forward records use non-standard datatype but still provide emoticon md5.
+      renderType = 'emoji'
+    }
+
+    return {
+      id: dataid,
+      datatype,
+      sourcename,
+      sourcetime,
+      sourceheadurl,
+      datafmt,
+      duration,
+      fullmd5,
+      thumbfullmd5,
+      md5,
+      renderType,
+      content
+    }
+  })
+
+  return {
+    info: { isChatRoom, title, desc },
+    items: parsed
+  }
+}
+
+const formatChatHistoryVideoDuration = (value) => {
+  const total = Math.max(0, parseInt(String(value || '').trim(), 10) || 0)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  if (m <= 0) return `0:${String(s).padStart(2, '0')}`
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+const normalizeChatHistoryRecordItem = (rec) => {
+  const mediaBase = process.client ? 'http://localhost:8000' : ''
+  const account = encodeURIComponent(selectedAccount.value || '')
+  const username = encodeURIComponent(selectedContact.value?.username || '')
+
+  const out = { ...(rec || {}) }
+  out.senderDisplayName = String(out.sourcename || '').trim()
+  out.senderAvatar = normalizeChatHistoryUrl(out.sourceheadurl)
+  out.fullTime = String(out.sourcetime || '').trim()
+
+  if (out.renderType === 'video') {
+    out.videoMd5 = pickFirstMd5(out.fullmd5, out.md5)
+    out.videoThumbMd5 = pickFirstMd5(out.thumbfullmd5)
+    out.videoDuration = String(out.duration || '').trim()
+    const thumbCandidates = []
+    if (out.videoMd5) {
+      thumbCandidates.push(`${mediaBase}/api/chat/media/video_thumb?account=${account}&md5=${encodeURIComponent(out.videoMd5)}&username=${username}`)
+    }
+    if (out.videoThumbMd5 && out.videoThumbMd5 !== out.videoMd5) {
+      thumbCandidates.push(`${mediaBase}/api/chat/media/video_thumb?account=${account}&md5=${encodeURIComponent(out.videoThumbMd5)}&username=${username}`)
+    }
+    out._videoThumbCandidates = thumbCandidates
+    out._videoThumbCandidateIndex = 0
+    out._videoThumbError = false
+    out.videoThumbUrl = thumbCandidates[0] || ''
+    out.videoUrl = out.videoMd5
+      ? `${mediaBase}/api/chat/media/video?account=${account}&md5=${encodeURIComponent(out.videoMd5)}&username=${username}`
+      : ''
+    if (!out.content || /^\[.+\]$/.test(String(out.content || '').trim())) out.content = '[视频]'
+  } else if (out.renderType === 'emoji') {
+    out.emojiMd5 = pickFirstMd5(out.md5, out.fullmd5, out.thumbfullmd5)
+    out.emojiUrl = out.emojiMd5
+      ? `${mediaBase}/api/chat/media/emoji?account=${account}&md5=${encodeURIComponent(out.emojiMd5)}&username=${username}`
+      : ''
+    if (!out.content || /^\[.+\]$/.test(String(out.content || '').trim())) out.content = '[表情]'
+  } else if (out.renderType === 'image') {
+    out.imageMd5 = pickFirstMd5(out.fullmd5, out.thumbfullmd5, out.md5)
+    out.imageUrl = out.imageMd5
+      ? `${mediaBase}/api/chat/media/image?account=${account}&md5=${encodeURIComponent(out.imageMd5)}&username=${username}`
+      : ''
+    if (!out.content || /^\[.+\]$/.test(String(out.content || '').trim())) out.content = '[图片]'
+  }
+
+  return out
+}
+
+const enhanceChatHistoryRecords = (records) => {
+  const list = Array.isArray(records) ? records : []
+  const videoByThumbMd5 = new Map()
+  const videoByMd5 = new Map()
+  const imageByMd5 = new Map()
+  const emojiByMd5 = new Map()
+
+  for (const rec of list) {
+    if (!rec) continue
+    if (rec.renderType === 'video' && rec.videoThumbMd5) {
+      videoByThumbMd5.set(String(rec.videoThumbMd5).toLowerCase(), rec)
+    }
+    if (rec.renderType === 'video' && rec.videoMd5) {
+      videoByMd5.set(String(rec.videoMd5).toLowerCase(), rec)
+    }
+    if (rec.renderType === 'image') {
+      const keys = [
+        pickFirstMd5(rec.imageMd5),
+        pickFirstMd5(rec.fullmd5),
+        pickFirstMd5(rec.thumbfullmd5),
+      ].filter(Boolean)
+      for (const k of keys) imageByMd5.set(k, rec)
+    }
+    if (rec.renderType === 'emoji') {
+      const keys = [
+        pickFirstMd5(rec.emojiMd5),
+        pickFirstMd5(rec.md5),
+        pickFirstMd5(rec.fullmd5),
+        pickFirstMd5(rec.thumbfullmd5),
+      ].filter(Boolean)
+      for (const k of keys) emojiByMd5.set(k, rec)
+    }
+  }
+
+  for (const rec of list) {
+    if (!rec) continue
+    if (String(rec.renderType || '') !== 'text') continue
+
+    const refKey = pickFirstMd5(rec.thumbfullmd5) || pickFirstMd5(rec.fullmd5)
+    if (!refKey) continue
+
+    const v = videoByThumbMd5.get(refKey) || videoByMd5.get(refKey)
+    if (v) {
+      const quoteThumbCandidates = Array.isArray(v._videoThumbCandidates) ? v._videoThumbCandidates.slice() : []
+      rec._quoteThumbCandidates = quoteThumbCandidates
+      rec._quoteThumbCandidateIndex = 0
+      rec._quoteThumbError = false
+      const quoteThumbUrl = quoteThumbCandidates[0] || v.videoThumbUrl || ''
+      rec.renderType = 'quote'
+      rec.quote = {
+        kind: 'video',
+        thumbUrl: quoteThumbUrl,
+        url: v.videoUrl || '',
+        duration: v.videoDuration || '',
+        label: v.content || '[视频]',
+        targetId: v.id || ''
+      }
+      rec.quoteMedia = {
+        videoMd5: v.videoMd5,
+        videoThumbMd5: v.videoThumbMd5,
+        videoUrl: v.videoUrl,
+        videoThumbUrl: quoteThumbUrl
+      }
+      continue
+    }
+
+    const img = imageByMd5.get(refKey)
+    if (img) {
+      rec.renderType = 'quote'
+      rec.quote = {
+        kind: 'image',
+        thumbUrl: img.imageUrl || '',
+        url: img.imageUrl || '',
+        label: img.content || '[图片]',
+        targetId: img.id || ''
+      }
+      rec.quoteMedia = {
+        imageMd5: img.imageMd5,
+        imageUrl: img.imageUrl
+      }
+      continue
+    }
+
+    const em = emojiByMd5.get(refKey)
+    if (em) {
+      rec.renderType = 'quote'
+      rec.quote = {
+        kind: 'emoji',
+        thumbUrl: em.emojiUrl || '',
+        url: em.emojiUrl || '',
+        label: em.content || '[表情]',
+        targetId: em.id || ''
+      }
+      rec.quoteMedia = {
+        emojiMd5: em.emojiMd5,
+        emojiUrl: em.emojiUrl
+      }
+    }
+  }
+
+  return list
+}
+
+const onChatHistoryVideoThumbError = (rec) => {
+  if (!rec) return
+  const candidates = rec._videoThumbCandidates
+  if (!Array.isArray(candidates) || candidates.length <= 1) {
+    rec._videoThumbError = true
+    return
+  }
+
+  const cur = Math.max(0, Number(rec._videoThumbCandidateIndex || 0))
+  const next = cur + 1
+  if (next < candidates.length) {
+    rec._videoThumbCandidateIndex = next
+    rec.videoThumbUrl = candidates[next]
+    return
+  }
+  rec._videoThumbError = true
+}
+
+const onChatHistoryQuoteThumbError = (rec) => {
+  if (!rec || !rec.quote) return
+  const candidates = rec._quoteThumbCandidates
+  if (!Array.isArray(candidates) || candidates.length <= 1) {
+    rec._quoteThumbError = true
+    return
+  }
+
+  const cur = Math.max(0, Number(rec._quoteThumbCandidateIndex || 0))
+  const next = cur + 1
+  if (next < candidates.length) {
+    rec._quoteThumbCandidateIndex = next
+    rec.quote.thumbUrl = candidates[next]
+    return
+  }
+  rec._quoteThumbError = true
+}
+
+const openChatHistoryQuote = (rec) => {
+  if (!process.client) return
+  const q = rec?.quote
+  if (!q) return
+
+  const kind = String(q.kind || '')
+  const url = String(q.url || '').trim()
+  if (!url) return
+
+  if (kind === 'video') {
+    try {
+      window.open(url, '_blank', 'noreferrer')
+    } catch {}
+    return
+  }
+
+  if (kind === 'image' || kind === 'emoji') {
+    openImagePreview(url)
+  }
+}
+
+const openChatHistoryModal = (message) => {
+  if (!process.client) return
+  chatHistoryModalTitle.value = String(message?.title || '聊天记录')
+
+  const recordItem = String(message?.recordItem || '').trim()
+  const parsed = parseChatHistoryRecord(recordItem)
+  chatHistoryModalInfo.value = parsed?.info || { isChatRoom: false }
+  const records = parsed?.items
+  chatHistoryModalRecords.value = Array.isArray(records) ? enhanceChatHistoryRecords(records.map(normalizeChatHistoryRecordItem)) : []
+
+  if (!chatHistoryModalRecords.value.length) {
+    // 降级：使用摘要内容按行展示
+    const lines = String(message?.content || '').trim().split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
+    chatHistoryModalInfo.value = { isChatRoom: false }
+    chatHistoryModalRecords.value = lines.map((line, idx) => normalizeChatHistoryRecordItem({ id: String(idx), datatype: '1', sourcename: '', sourcetime: '', content: line, renderType: 'text' }))
+  }
+
+  chatHistoryModalVisible.value = true
+  document.body.style.overflow = 'hidden'
+}
+
+const closeChatHistoryModal = () => {
+  chatHistoryModalVisible.value = false
+  chatHistoryModalTitle.value = ''
+  chatHistoryModalRecords.value = []
+  chatHistoryModalInfo.value = { isChatRoom: false }
+  document.body.style.overflow = previewImageUrl.value ? 'hidden' : ''
+}
+
 const onGlobalClick = (e) => {
   if (contextMenu.value.visible) closeContextMenu()
   if (messageSearchSenderDropdownOpen.value) {
@@ -3504,6 +4080,7 @@ const onGlobalKeyDown = (e) => {
   if (key === 'Escape') {
     if (contextMenu.value.visible) closeContextMenu()
     if (previewImageUrl.value) closeImagePreview()
+    if (chatHistoryModalVisible.value) closeChatHistoryModal()
     if (messageSearchSenderDropdownOpen.value) closeMessageSearchSenderDropdown()
     if (messageSearchOpen.value) closeMessageSearch()
     if (searchContext.value?.active) exitSearchContext()
@@ -4103,6 +4680,65 @@ const LinkCard = defineComponent({
 .wechat-special-sent-side::after {
   left: auto;
   right: -4px;
+}
+
+.wechat-chat-history-card {
+  width: 210px;
+  background: #ffffff;
+  border-radius: var(--message-radius);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.wechat-chat-history-card:hover {
+  background: #f5f5f5;
+}
+
+.wechat-chat-history-body {
+  padding: 10px 12px;
+}
+
+.wechat-chat-history-title {
+  font-size: 14px;
+  font-weight: 400;
+  color: #161616;
+  margin-bottom: 6px;
+}
+
+.wechat-chat-history-preview {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+.wechat-chat-history-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wechat-chat-history-bottom {
+  height: 27px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-top: none;
+  position: relative;
+}
+
+.wechat-chat-history-bottom::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 13px;
+  right: 13px;
+  height: 1.5px;
+  background: #e8e8e8;
+}
+
+.wechat-chat-history-bottom span {
+  font-size: 12px;
+  color: #b2b2b2;
 }
 
 /* 转账消息样式 - 微信风格 */

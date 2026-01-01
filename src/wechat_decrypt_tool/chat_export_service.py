@@ -890,6 +890,7 @@ def _parse_message_for_export(
     content_text = raw_text
     title = ""
     url = ""
+    record_item = ""
     image_md5 = ""
     image_file_id = ""
     emoji_md5 = ""
@@ -929,6 +930,7 @@ def _parse_message_for_export(
         content_text = str(parsed.get("content") or "")
         title = str(parsed.get("title") or "")
         url = str(parsed.get("url") or "")
+        record_item = str(parsed.get("recordItem") or "")
         quote_title = str(parsed.get("quoteTitle") or "")
         quote_content = str(parsed.get("quoteContent") or "")
         amount = str(parsed.get("amount") or "")
@@ -1089,14 +1091,17 @@ def _parse_message_for_export(
             content_text = _infer_message_brief_by_local_type(local_type)
         else:
             if content_text.startswith("<") or content_text.startswith('"<'):
+                parsed_special = False
                 if "<appmsg" in content_text.lower():
                     parsed = _parse_app_message(content_text)
                     rt = str(parsed.get("renderType") or "")
                     if rt and rt != "text":
+                        parsed_special = True
                         render_type = rt
                         content_text = str(parsed.get("content") or content_text)
                         title = str(parsed.get("title") or title)
                         url = str(parsed.get("url") or url)
+                        record_item = str(parsed.get("recordItem") or record_item)
                         quote_title = str(parsed.get("quoteTitle") or quote_title)
                         quote_content = str(parsed.get("quoteContent") or quote_content)
                         amount = str(parsed.get("amount") or amount)
@@ -1121,9 +1126,11 @@ def _parse_message_for_export(
                             )
                             if not content_text:
                                 content_text = transfer_status or "转账"
-                t = _extract_xml_tag_text(content_text, "title")
-                d = _extract_xml_tag_text(content_text, "des")
-                content_text = t or d or _infer_message_brief_by_local_type(local_type)
+
+                if not parsed_special:
+                    t = _extract_xml_tag_text(content_text, "title")
+                    d = _extract_xml_tag_text(content_text, "des")
+                    content_text = t or d or _infer_message_brief_by_local_type(local_type)
 
     if not content_text:
         content_text = _infer_message_brief_by_local_type(local_type)
@@ -1151,6 +1158,7 @@ def _parse_message_for_export(
         "content": content_text,
         "title": title,
         "url": url,
+        "recordItem": record_item,
         "thumbUrl": thumb_url,
         "imageMd5": image_md5,
         "imageFileId": image_file_id,
