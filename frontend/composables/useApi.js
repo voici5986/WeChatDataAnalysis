@@ -185,6 +185,14 @@ export const useApi = () => {
     })
   }
 
+  // 获取已保存的密钥（数据库密钥 + 图片密钥）
+  const getSavedKeys = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/keys' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
   // 批量解密所有图片
   const decryptAllMedia = async (params = {}) => {
     return await request('/media/decrypt_all', {
@@ -250,6 +258,7 @@ export const useApi = () => {
     openChatMediaFolder,
     downloadChatEmoji,
     saveMediaKeys,
+    getSavedKeys,
     decryptAllMedia,
     createChatExport,
     getChatExport,

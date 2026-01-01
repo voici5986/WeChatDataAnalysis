@@ -124,21 +124,7 @@
             </div>
             <div>
               <h2 class="text-xl font-bold text-[#000000e6]">图片密钥</h2>
-              <p class="text-sm text-[#7F7F7F]">请使用 wx_key 获取后在此填写</p>
-            </div>
-          </div>
-
-          <!-- 获取密钥说明 -->
-          <div class="mb-6">
-            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <div class="flex items-start">
-                <svg class="w-5 h-5 text-blue-600 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-                <div class="text-sm text-blue-800">
-                  使用 <a href="https://github.com/ycccccccy/wx_key" target="_blank" class="underline">wx_key</a> 获取密钥；AES 可选（V4-V2 需要）。
-                </div>
-              </div>
+              <p class="text-sm text-[#7F7F7F]">填写后会自动保存并下次回填</p>
             </div>
           </div>
 
@@ -168,25 +154,12 @@
                 </div>
               </div>
 
-              <div class="flex flex-wrap gap-3 mt-4">
-                <button
-                  type="button"
-                  @click="applyManualKeys({ save: true })"
-                  :disabled="manualSaving"
-                  class="inline-flex items-center px-4 py-2 bg-[#10AEEF] text-white rounded-lg font-medium hover:bg-[#0D9BD9] transition-all duration-200 disabled:opacity-50"
-                >
-                  {{ manualSaving ? '保存中...' : '保存' }}
-                </button>
-                <button
-                  type="button"
-                  @click="clearManualKeys"
-                  class="inline-flex items-center px-4 py-2 bg-white text-[#7F7F7F] border border-[#EDEDED] rounded-lg font-medium hover:bg-gray-50 transition-all duration-200"
-                >
-                  清空
-                </button>
-              </div>
-
-              <p v-if="mediaKeys.message" class="text-xs text-[#7F7F7F] mt-3">{{ mediaKeys.message }}</p>
+              <p class="mt-3 text-xs text-[#7F7F7F] flex items-center">
+                <svg class="w-4 h-4 mr-1 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                使用 <a href="https://github.com/ycccccccy/wx_key" target="_blank" class="text-[#07C160] hover:text-[#06AD56]">wx_key</a> 获取图片密钥；AES 可选（V4-V2 需要）
+              </p>
             </div>
           </div>
 
@@ -394,7 +367,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useApi } from '~/composables/useApi'
 
-const { decryptDatabase, saveMediaKeys } = useApi()
+const { decryptDatabase, saveMediaKeys, getSavedKeys } = useApi()
 
 const loading = ref(false)
 const error = ref('')
@@ -423,8 +396,7 @@ const formErrors = reactive({
 // 图片密钥相关
 const mediaKeys = reactive({
   xor_key: '',
-  aes_key: '',
-  message: ''
+  aes_key: ''
 })
 
 // 手动输入密钥（从 wx_key 获取）
@@ -436,7 +408,6 @@ const manualKeyErrors = reactive({
   xor_key: '',
   aes_key: ''
 })
-const manualSaving = ref(false)
 
 const normalizeXorKey = (value) => {
   const raw = String(value || '').trim()
@@ -455,7 +426,34 @@ const normalizeAesKey = (value) => {
   return { ok: true, value: raw.slice(0, 16), message: '' }
 }
 
-const applyManualKeys = async (options = { save: false }) => {
+const prefillKeysForAccount = async (account) => {
+  const acc = String(account || '').trim()
+  if (!acc) return
+  try {
+    const resp = await getSavedKeys({ account: acc })
+    if (!resp || resp.status !== 'success') return
+    const keys = resp.keys || {}
+
+    const dbKey = String(keys.db_key || '').trim()
+    if (dbKey && !String(formData.key || '').trim()) {
+      formData.key = dbKey
+    }
+
+    const xorKey = String(keys.image_xor_key || '').trim()
+    if (xorKey && !String(manualKeys.xor_key || '').trim()) {
+      manualKeys.xor_key = xorKey
+    }
+
+    const aesKey = String(keys.image_aes_key || '').trim()
+    if (aesKey && !String(manualKeys.aes_key || '').trim()) {
+      manualKeys.aes_key = aesKey
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
+const applyManualKeys = () => {
   manualKeyErrors.xor_key = ''
   manualKeyErrors.aes_key = ''
   error.value = ''
@@ -463,39 +461,24 @@ const applyManualKeys = async (options = { save: false }) => {
   const aes = normalizeAesKey(manualKeys.aes_key)
   if (!aes.ok) {
     manualKeyErrors.aes_key = aes.message
-    return
+    return false
   }
 
-  const hasXor = !!String(manualKeys.xor_key || '').trim()
-  if (options?.save || hasXor) {
-    const xor = normalizeXorKey(manualKeys.xor_key)
-    if (!xor.ok) {
-      manualKeyErrors.xor_key = xor.message
-      return
-    }
-    mediaKeys.xor_key = xor.value
+  mediaKeys.aes_key = aes.value
+
+  const rawXor = String(manualKeys.xor_key || '').trim()
+  if (!rawXor) {
+    mediaKeys.xor_key = ''
+    return true
   }
 
-  if (aes.value) {
-    mediaKeys.aes_key = aes.value
+  const xor = normalizeXorKey(rawXor)
+  if (!xor.ok) {
+    manualKeyErrors.xor_key = xor.message
+    return false
   }
-
-  mediaKeys.message = options?.save ? '已保存' : '已应用'
-
-  if (!options?.save) return
-
-  try {
-    manualSaving.value = true
-    await saveMediaKeys({
-      account: mediaAccount.value || null,
-      xor_key: mediaKeys.xor_key,
-      aes_key: aes.value || null
-    })
-  } catch (e) {
-    mediaKeys.message = '保存失败（可继续解密）'
-  } finally {
-    manualSaving.value = false
-  }
+  mediaKeys.xor_key = xor.value
+  return true
 }
 
 const clearManualKeys = () => {
@@ -505,7 +488,6 @@ const clearManualKeys = () => {
   manualKeyErrors.aes_key = ''
   mediaKeys.xor_key = ''
   mediaKeys.aes_key = ''
-  mediaKeys.message = ''
 }
 
 // 图片解密相关
@@ -592,7 +574,7 @@ const handleDecrypt = async () => {
       // 进入图片密钥填写步骤
       clearManualKeys()
       currentStep.value = 1
-      mediaKeys.message = ''
+      await prefillKeysForAccount(mediaAccount.value)
     } else if (result.status === 'failed') {
       if (result.failure_count > 0 && result.success_count === 0) {
         error.value = result.message || '所有文件解密失败'
@@ -689,21 +671,46 @@ const decryptAllImages = async () => {
 // 从密钥步骤进入图片解密步骤
 const goToMediaDecryptStep = async () => {
   error.value = ''
-  // 用户填写了任一项时，尝试校验并应用（未填写则允许直接进入，后端会使用已保存密钥或报错提示）
-  if (manualKeys.xor_key || manualKeys.aes_key) {
-    await applyManualKeys({ save: false })
-    if (manualKeyErrors.xor_key || manualKeyErrors.aes_key) return
+  // 校验并应用（未填写则允许直接进入，后端会使用已保存密钥或报错提示）
+  const ok = applyManualKeys()
+  if (!ok || manualKeyErrors.xor_key || manualKeyErrors.aes_key) return
+
+  // 用户已输入 XOR 时，自动保存一次，避免下次重复输入（失败不影响继续）
+  if (mediaKeys.xor_key) {
+    try {
+      const aesVal = String(mediaKeys.aes_key || '').trim()
+      await saveMediaKeys({
+        account: mediaAccount.value || null,
+        xor_key: mediaKeys.xor_key,
+        aes_key: aesVal ? aesVal : null
+      })
+    } catch (e) {
+      // ignore
+    }
   }
   currentStep.value = 2
 }
 
 // 跳过图片解密，直接查看聊天记录
-const skipToChat = () => {
+const skipToChat = async () => {
+  try {
+    const ok = applyManualKeys()
+    if (ok && mediaKeys.xor_key) {
+      const aesVal = String(mediaKeys.aes_key || '').trim()
+      await saveMediaKeys({
+        account: mediaAccount.value || null,
+        xor_key: mediaKeys.xor_key,
+        aes_key: aesVal ? aesVal : null
+      })
+    }
+  } catch (e) {
+    // ignore
+  }
   navigateTo('/chat')
 }
 
 // 页面加载时检查是否有选中的账户
-onMounted(() => {
+onMounted(async () => {
   if (process.client && typeof window !== 'undefined') {
     const selectedAccount = sessionStorage.getItem('selectedAccount')
     if (selectedAccount) {
@@ -718,6 +725,7 @@ onMounted(() => {
         }
         // 清除sessionStorage
         sessionStorage.removeItem('selectedAccount')
+        await prefillKeysForAccount(mediaAccount.value)
       } catch (e) {
         console.error('解析账户信息失败:', e)
       }

@@ -10,6 +10,7 @@ from .routers.chat_export import router as _chat_export_router
 from .routers.chat_media import router as _chat_media_router
 from .routers.decrypt import router as _decrypt_router
 from .routers.health import router as _health_router
+from .routers.keys import router as _keys_router
 from .routers.media import router as _media_router
 from .routers.wechat_detection import router as _wechat_detection_router
 
@@ -38,6 +39,7 @@ app.add_middleware(
 app.include_router(_health_router)
 app.include_router(_wechat_detection_router)
 app.include_router(_decrypt_router)
+app.include_router(_keys_router)
 app.include_router(_media_router)
 app.include_router(_chat_router)
 app.include_router(_chat_export_router)
